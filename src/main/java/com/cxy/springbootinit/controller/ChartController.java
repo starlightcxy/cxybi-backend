@@ -1,5 +1,6 @@
 package com.cxy.springbootinit.controller;
 
+import cn.hutool.core.io.FileUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.cxy.springbootinit.annotation.AuthCheck;
@@ -12,6 +13,7 @@ import com.cxy.springbootinit.constant.UserConstant;
 import com.cxy.springbootinit.exception.BusinessException;
 import com.cxy.springbootinit.exception.ThrowUtils;
 import com.cxy.springbootinit.manager.AiManager;
+import com.cxy.springbootinit.manager.RedisLimiterManager;
 import com.cxy.springbootinit.model.dto.chart.*;
 import com.cxy.springbootinit.model.entity.Chart;
 import com.cxy.springbootinit.model.entity.User;
@@ -29,6 +31,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * 帖子接口
@@ -48,6 +52,9 @@ public class ChartController {
 
     @Resource
     private AiManager aiManager;
+
+    @Resource
+    private RedisLimiterManager redisLimiterManager;
 
     // region 增删改查
 
@@ -277,10 +284,33 @@ public class ChartController {
         //校验
         ThrowUtils.throwIf(StringUtils.isBlank(goal),ErrorCode.PARAMS_ERROR,"目标为空");
         ThrowUtils.throwIf(StringUtils.isNotBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, "名称过长");
-        User loginUser = userService.getLoginUser(request);
 
-        //指定模型id
+        //获取文件信息
+        long size = multipartFile.getSize();
+        String originalFilename = multipartFile.getOriginalFilename();
+
+        /**
+         * 校验文件大小
+         * 定义1MB大小常量，并校验
+         */
+        final long ONE_MB = 1024 * 1024L;
+        ThrowUtils.throwIf(size > ONE_MB, ErrorCode.PARAMS_ERROR, "文件超过1MB");
+
+        /**
+         * 校验文件后缀
+         * 获取后缀，定义合法列表，校验
+         */
+        String suffix = FileUtil.getSuffix(originalFilename);
+        List<String> validFileSuffixList = Arrays.asList("png", "jpg", "svg", "jpeg", "webp");
+        ThrowUtils.throwIf(!validFileSuffixList.contains(suffix), ErrorCode.PARAMS_ERROR, "文件后缀非法");
+
+
+        //获取用户信息，指定模型id
+        User loginUser = userService.getLoginUser(request);
         long biModelId = 1766713416011436034L;
+
+        //限流，加前缀是控制限流粒度。如果不加，别的方法和这个方法同时调用，同一个key，两个方法的次数会混在一起。
+        redisLimiterManager.doRateLimit("genChartByAi_" + loginUser.getId());
 
         //构造用户输入
         StringBuilder userInput = new StringBuilder();
